@@ -1357,6 +1357,65 @@ class PlayState extends MusicBeatState
 		
 		var holdCrotchet:Float = Math.max(Conductor.stepCrotchet / holdSubdivisions, 10);
 		
+		// ==========================================
+		// PASS 1: Extract Legacy Events First
+		// ==========================================
+		for (section in noteData)
+		{
+			for (songNotes in section.sectionNotes)
+			{
+				var playfield:Int = Std.int(songNotes[1] / SONG.keys);
+				
+				if (playfield < 0) // legacy event notes
+				{
+					events.push(
+						{
+							strumTime: songNotes[0] + ClientPrefs.noteOffset,
+							event: songNotes[2],
+							value1: songNotes[3],
+							value2: songNotes[4]
+						});
+				}
+			}
+		}
+		
+		// CRITICAL FIX: Sort events chronologically to ensure SV accumulation functions correctly
+		events.sort(SortUtil.sortByTime);
+		
+		// ==========================================
+		// PASS 2: Process Events and SVs
+		// ==========================================
+		for (event in events)
+		{
+			final eventName = event.event;
+			
+			if (!eventsPushed.contains(eventName))
+			{
+				var baseScriptFile:String = 'data/events/$eventName';
+				if (!FunkinAssets.exists(FunkinScript.getPath(baseScriptFile), TEXT)) baseScriptFile = 'events/$eventName';
+				
+				final scriptFile = FunkinScript.getPath(baseScriptFile);
+				
+				if (FunkinAssets.exists(scriptFile, TEXT)) eventScripts.addScript(initFunkinScript(scriptFile, eventName));
+				
+				firstEventPush(event);
+				
+				eventsPushed.push(eventName);
+			}
+			
+			event.strumTime -= eventNoteEarlyTrigger(event);
+			eventNotes.push(event);
+			eventPushed(event);
+		}
+		
+		// No need to sort if there's a single one or none at all
+		if (eventNotes.length > 1) eventNotes.sort(SortUtil.sortByTime);
+		
+		speedChanges.sort(SortUtil.svSort);
+		
+		// ==========================================
+		// PASS 3: Generate Notes
+		// ==========================================
 		for (section in noteData)
 		{
 			if (section.changeBPM) holdCrotchet = (15000 / section.bpm / holdSubdivisions);
@@ -1365,22 +1424,9 @@ class PlayState extends MusicBeatState
 			{
 				var daStrumTime:Float = songNotes[0];
 				var daNoteData:Int = Std.int(songNotes[1] % SONG.keys);
-				var playfield:Int = 0;
+				var playfield:Int = Std.int(songNotes[1] / SONG.keys);
 				
-				playfield = Std.int(songNotes[1] / SONG.keys);
-				
-				if (playfield < 0) // legacy event notes
-				{
-					events.push(
-						{
-							strumTime: daStrumTime + ClientPrefs.noteOffset,
-							event: songNotes[2],
-							value1: songNotes[3],
-							value2: songNotes[4]
-						});
-						
-					continue;
-				}
+				if (playfield < 0) continue; // Skip legacy events as they were handled in Pass 1
 				
 				if (playfield >= SONG.lanes) continue;
 				
@@ -1392,9 +1438,6 @@ class PlayState extends MusicBeatState
 				
 				var type:Dynamic = songNotes[3];
 				if (!Std.isOfType(type, String)) type = OLDChartEditorState.noteTypeList[type];
-				
-				// TODO: maybe make a checkNoteType n shit but idfk im lazy
-				// or maybe make a "Transform Notes" event which'll make notes which don't change texture change into the specified one
 				
 				var swagNote:Note = new Note(daStrumTime, daNoteData, oldNote, false, false, playfield);
 				swagNote.row = Conductor.secsToRow(daStrumTime);
@@ -1425,7 +1468,6 @@ class PlayState extends MusicBeatState
 				
 				callNoteTypeScript(swagNote.noteType, 'setupNote', [swagNote]);
 				
-				// floored but rounded????
 				final flooredSusLength = Math.round(susLength);
 				
 				if (flooredSusLength <= 0) continue;
@@ -1441,7 +1483,7 @@ class PlayState extends MusicBeatState
 					sustainNote.gfNote = swagNote.gfNote;
 					sustainNote.noteType = swagNote.noteType;
 					
-					if (!swagNote.hitCausesMiss && !swagNote.canMiss) sustainNote.blockHit = true; // stops you from holding a note without key pressing first
+					if (!swagNote.hitCausesMiss && !swagNote.canMiss) sustainNote.blockHit = true;
 					if (!sustainNote.alive) break;
 					
 					sustainNote.ID = unspawnNotes.length;
@@ -1456,34 +1498,6 @@ class PlayState extends MusicBeatState
 				}
 			}
 		}
-		
-		for (event in events)
-		{
-			final eventName = event.event;
-			
-			if (!eventsPushed.contains(eventName))
-			{
-				var baseScriptFile:String = 'data/events/$eventName';
-				if (!FunkinAssets.exists(FunkinScript.getPath(baseScriptFile), TEXT)) baseScriptFile = 'events/$eventName';
-				
-				final scriptFile = FunkinScript.getPath(baseScriptFile);
-				
-				if (FunkinAssets.exists(scriptFile, TEXT)) eventScripts.addScript(initFunkinScript(scriptFile, eventName));
-				
-				firstEventPush(event);
-				
-				eventsPushed.push(eventName);
-			}
-			
-			event.strumTime -= eventNoteEarlyTrigger(event);
-			eventNotes.push(event);
-			eventPushed(event);
-		}
-		
-		// No need to sort if there's a single one or none at all
-		if (eventNotes.length > 1) eventNotes.sort(SortUtil.sortByTime);
-		
-		speedChanges.sort(SortUtil.svSort);
 		
 		#if debug
 		trace('loading chart took: ' + (Sys.time() - cpuTime));
